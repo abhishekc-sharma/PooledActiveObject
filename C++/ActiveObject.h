@@ -19,9 +19,7 @@ public:
   // call
   template <typename Function, typename... Args>
   auto call(Function func, Args&& ... args) -> std::result_of_t<Function&&(T*, Args&&...)>;
-  // asynchronous call
-  template<typename Function, typename... Args>
-  auto async_call(Function func, Args&& ... args) ->
+
 
 private:
   // scheduler
