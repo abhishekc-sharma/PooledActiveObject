@@ -5,39 +5,77 @@
 #include <future>
 #include <queue>
 #include <type_traits>
+#include <thread>
 
 template <typename T>
 class ActiveObject {
 public:
   // constructor
-  ActiveObject(T *obj);
+  ActiveObject(std::unique_ptr<T>&& ptr);
   // copy constructor
   // assignment
   // move
   // destructor
-  ~ActiveObject();
   // call
   template <typename Function, typename... Args>
-  auto call(Function func, Args&& ... args) -> std::result_of_t<Function&&(T*, Args&&...)>;
+  auto call(Function func, Args&& ... args) -> std::result_of_t<Function&&(T&, Args&&...)>;
 
+  // asynchronous call
+  auto async_call(std::function<void(T&, int)>, int) -> std::future<std::result_of_t<std::function<void(T&, int)>&&(T&, int)>>;
+
+  template <typename Function, typename... Args>
+  auto async_call(Function func, Args&& ... args) -> std::future<std::result_of_t<Function&&(T&, Args&&...)>>;
 
 private:
+  template <typename ResultType>
+  auto make_async_call(std::function<ResultType()> func, std::false_type);
+
+  template <typename ResultType>
+  auto make_async_call(std::function<ResultType()> func, std::true_type);
+
   // scheduler
-  T *ptr;
+  std::unique_ptr<T> ptr;
 };
 
 template <typename T>
-ActiveObject<T>::ActiveObject(T *obj) : ptr(obj) {}
+ActiveObject<T>::ActiveObject(std::unique_ptr<T>&& ptr) : ptr(std::move(ptr)) {}
 
 template <typename T>
-ActiveObject<T>::~ActiveObject() {
-  delete ptr;
+template <typename Function, typename... Args>
+auto ActiveObject<T>::call(Function func, Args&& ... args) -> std::result_of_t<Function&&(T&, Args&&...)> {
+  return ((ptr.get())->*func)(args...);
+}
+
+template<typename T>
+template <typename ResultType>
+auto ActiveObject<T>::make_async_call(std::function<ResultType()> func, std::false_type) {
+  auto result_promise = std::promise<ResultType>();
+  auto result_future = result_promise.get_future();
+
+  result_promise.set_value(func());
+  return result_future;
+}
+
+template<typename T>
+template <typename ResultType>
+auto ActiveObject<T>::make_async_call(std::function<ResultType()> func, std::true_type) {
+  auto result_promise = std::promise<ResultType>();
+  auto result_future = result_promise.get_future();
+
+  func();
+  result_promise.set_value();
+  return result_future;
 }
 
 template <typename T>
 template <typename Function, typename... Args>
-auto ActiveObject<T>::call(Function func, Args&& ... args) -> std::result_of_t<Function&&(T*, Args&&...)> {
-  return (ptr->*func)(args...);
+auto ActiveObject<T>::async_call(Function func, Args&& ... args) -> std::future<std::result_of_t<Function&&(T&, Args&&...)>> {
+  using ResultType = std::result_of_t<Function&&(T&, Args&&...)>;
+  constexpr bool is_void = std::is_same<ResultType, void>::value;
+  auto bound_call = std::bind(func, ptr.get(), args...);
+  return make_async_call<ResultType>(bound_call, std::is_same<ResultType, void>());
 }
+
+
 
 #endif
