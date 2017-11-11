@@ -7,6 +7,7 @@
 #include <queue>
 #include <type_traits>
 #include <thread>
+#include "thread_pool.h"
 
 namespace dp {
   template <typename T>
@@ -22,14 +23,14 @@ namespace dp {
 
     // asynchronous call
     template <typename Function, typename... Args>
-    auto async_call(Function func, Args&& ... args) -> std::future<std::result_of_t<Function&&(T&, Args&&...)>>;
+    auto async_call(thread_pool& pool, Function func, Args&& ... args) -> std::future<std::result_of_t<Function&&(T&, Args&&...)>>;
 
   private:
     template <typename ResultType>
-    auto make_async_call(std::function<ResultType()> func, std::false_type);
+    auto make_async_call(thread_pool& pool, std::function<ResultType()> func, std::false_type);
 
     template <typename ResultType>
-    auto make_async_call(std::function<ResultType()> func, std::true_type);
+    auto make_async_call(thread_pool& pool, std::function<ResultType()> func, std::true_type);
 
     std::unique_ptr<T> ptr;
   };
@@ -45,32 +46,38 @@ namespace dp {
 
   template<typename T>
   template <typename ResultType>
-  auto active_object<T>::make_async_call(std::function<ResultType()> func, std::false_type) {
-    auto result_promise = std::promise<ResultType>();
-    auto result_future = result_promise.get_future();
+  auto active_object<T>::make_async_call(thread_pool& pool, std::function<ResultType()> func, std::false_type) {
+    auto result_promise = std::shared_ptr<std::promise<ResultType>>(new std::promise<ResultType>());
+    auto result_future = result_promise->get_future();
 
-    result_promise.set_value(func());
+    pool.submit([promise=std::move(result_promise), function=std::move(func)]() mutable {
+      promise->set_value(function());
+    });
+
     return result_future;
   }
 
   template<typename T>
   template <typename ResultType>
-  auto active_object<T>::make_async_call(std::function<ResultType()> func, std::true_type) {
-    auto result_promise = std::promise<ResultType>();
-    auto result_future = result_promise.get_future();
+  auto active_object<T>::make_async_call(thread_pool& pool, std::function<ResultType()> func, std::true_type) {
+    auto result_promise = std::shared_ptr<std::promise<ResultType>>(new std::promise<ResultType>());
+    auto result_future = result_promise->get_future();
 
-    func();
-    result_promise.set_value();
+    pool.submit([promise=std::move(result_promise), function=std::move(func)]() mutable {
+      function();
+      promise->set_value();
+    });
+
     return result_future;
   }
 
   template <typename T>
   template <typename Function, typename... Args>
-  auto active_object<T>::async_call(Function func, Args&& ... args) -> std::future<std::result_of_t<Function&&(T&, Args&&...)>> {
+  auto active_object<T>::async_call(thread_pool& pool, Function func, Args&& ... args) -> std::future<std::result_of_t<Function&&(T&, Args&&...)>> {
     using ResultType = std::result_of_t<Function&&(T&, Args&&...)>;
     constexpr bool is_void = std::is_same<ResultType, void>::value;
     auto bound_call = std::bind(func, ptr.get(), args...);
-    return make_async_call<ResultType>(bound_call, std::is_same<ResultType, void>());
+    return make_async_call<ResultType>(pool, bound_call, std::is_same<ResultType, void>());
   }
 
   template <typename T, typename... Args>
